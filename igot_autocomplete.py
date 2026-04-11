@@ -690,7 +690,7 @@ def submit_survey(session: requests.Session, course: dict) -> bool:
         if ft == "radio":
             answer = "5"            # highest rating
         elif ft == "text":
-            answer = "Excellent course, highly recommended."
+            answer = "Amazing course, highly recommended. Learnt a lot!"
         elif ft == "checkbox":
             answer = "Yes"
         else:

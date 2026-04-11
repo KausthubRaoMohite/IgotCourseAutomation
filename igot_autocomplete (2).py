@@ -9,6 +9,9 @@ HOW TO USE
 1. Log in to portal.igotkarmayogi.gov.in in Chrome.
 2. Open DevTools → Application → Cookies → copy the full cookie string.
 3. Fill in the CONFIG block below and run:  python igot_autocomplete.py
+
+⚠️ Do not log out of the Chrome browser while the script is running, 
+or it will instantly invalidate the cookie the script is using!
 """
 
 import time

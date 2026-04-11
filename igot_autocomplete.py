@@ -10,17 +10,45 @@ HOW TO USE
 2. Open DevTools → Application → Cookies → copy the full cookie string.
 3. Fill in the CONFIG block below and run:  python igot_autocomplete.py
 
-⚠️ Do not log out of the Chrome browser while the script is running, 
+PROXY SUPPORT (optional)
+-------------------------
+If you are behind an authenticated corporate/office proxy, set all four
+environment variables below before running. If any are missing the script
+runs without a proxy (direct connection).
+
+  Windows (Command Prompt):
+      set PROXY_USER=your_username
+      set PROXY_PASSWORD=your_password
+      set PROXY_HOST=proxy.company.com
+      set PROXY_PORT=8080
+      python igot_autocomplete.py
+
+  Windows (PowerShell):
+      $env:PROXY_USER="your_username"
+      $env:PROXY_PASSWORD="your_password"
+      $env:PROXY_HOST="proxy.company.com"
+      $env:PROXY_PORT="8080"
+      python igot_autocomplete.py
+
+  Linux / macOS:
+      PROXY_USER=your_username PROXY_PASSWORD=your_password \
+      PROXY_HOST=proxy.company.com PROXY_PORT=8080 \
+      python igot_autocomplete.py
+
+⚠️ Do not log out of the Chrome browser while the script is running,
 or it will instantly invalidate the cookie the script is using!
 """
 
 import time
+import urllib.parse
 import random
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 import requests
 import urllib3
+import os
+os.environ['no_proxy'] = '*' # REMOVE THIS IF NEEDED (PROXY BASED)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -30,20 +58,18 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 CONFIG = {
     # ── Identity ──────────────────────────────────────────────────────────────
-    "user_id":   "4ce33233-8498-456b-81e8-b825792927cd",   # wid / userId
-    "course_id": "do_1145242891094835201284",               # leave blank if using "all courses" mode
+    "user_id":   "--PASTE YOUR USER-ID HERE--",   # wid / userId
+    "course_id": "--PASTE YOUR COURSE-ID HERE (Begins with do_)--",               # leave blank if using "all courses" mode | Example of Id: "do_114371136825573376161" 
 
     # Paste the FULL cookie string from DevTools (one long line, expires per session)
     "cookie": (
-        "unbxd.netcoreId=IjMyZTA0ZmJlODEyOTE2MWIwNDNhMmEwZGY4MzU1NTVhZTE0YzkyM2QzNjA0N2Q4YTE5ZjliODMyMjhmMGEwZGUi; "
-        "connect.sid=s%3AyYjeqYT_MW7un59XcIB0vX6QHi15-8gs.VK7D1mHucSf9Sf9WUf7DRX%2BR%2FD2cTLEFzX9QeX4QLck; "
-        # … paste the rest of your cookie string here …
+        "--PASTE YOUR COOKIE STRING HERE--"
     ),
 
     # ── Run mode ──────────────────────────────────────────────────────────────
     # "single"  → process only CONFIG["course_id"]
     # "all"     → fetch all In-Progress enrolled courses and process each
-    "mode": "all",
+    "mode": "single",
 
     # Course IDs to always skip regardless of mode (POSH etc.)
     "skip_course_ids": [
@@ -78,13 +104,23 @@ CONFIG = {
         "completion_fraction_min": 0.95,
         "completion_fraction_max": 0.99,
 
-        # True  = actually sleep the full video duration (safest, slow)
-        # False = fast mode; fires heartbeats with only small jitter delays
-        "real_time_mode": False,
+        # Video watch mode — pick ONE of the three:
+        #   "real_time" → actually sleeps the full video duration (safest, slow)
+        #   "fast"      → periodic heartbeats with small jitter sleeps (balanced)
+        #   "warp"      → two PATCHes only: started + completed, no heartbeat loop.
+        #                 The reported watch-time equals the full content duration. 
+        #                 ⚠️USE WARP MODE WITH CAUTION
 
-        # Delays used in fast mode
+        "watch_mode": "warp",
+
+        # Delays used in fast mode (ignored in real_time and warp)
         "fast_mode_sleep_min": 1.5,
         "fast_mode_sleep_max": 4.0,
+
+        # Warp mode: tiny pause between the start-PATCH and completion-PATCH
+        # (simulates browser processing time between the two events)
+        "warp_between_patches_min": 0.8,
+        "warp_between_patches_max": 2.5,
 
         # Skip items the server already shows as completed (status == 2)
         "skip_if_completed": True,
@@ -120,9 +156,51 @@ def _jitter(base: float, j: float) -> float:
     return base + random.uniform(-j, j)
 
 
+def _build_proxies() -> Optional[dict]:
+    """
+    Builds a proxy config entirely from environment variables.
+    """
+    user     = os.environ.get("PROXY_USER",     "").strip()
+    password = os.environ.get("PROXY_PASSWORD",  "").strip()
+    host     = os.environ.get("PROXY_HOST",      "").strip()
+    port     = os.environ.get("PROXY_PORT",      "").strip()
+
+    if not all([user, password, host, port]):
+        missing = [k for k, v in {
+            "PROXY_USER": user, "PROXY_PASSWORD": password,
+            "PROXY_HOST": host, "PROXY_PORT": port,
+        }.items() if not v]
+        if any([user, password, host, port]):   # some but not all set → warn
+            log.warning(
+                "Proxy : incomplete config — missing %s. Running without proxy.",
+                ", ".join(missing),
+            )
+        return None
+
+    # --- THE FIX IS HERE ---
+    # Safely encode special characters (like @, #, !) in the username/password
+    safe_user = urllib.parse.quote_plus(user)
+    safe_password = urllib.parse.quote_plus(password)
+
+    proxy_url = f"http://{safe_user}:{safe_password}@{host}:{port}"
+    # -----------------------
+
+    # Only print the 'user' and 'host' to the logs so your password stays hidden!
+    log.info("Proxy : %s@%s:%s", user, host, port)
+    
+    return {"http": proxy_url, "https": proxy_url}
+
+
 def build_session() -> requests.Session:
     s = requests.Session()
     s.verify = False
+
+    proxies = _build_proxies()
+    if proxies:
+        s.proxies.update(proxies)
+    else:
+        log.info("Proxy : none (PROXY_USER / PROXY_PASSWORD not set — direct connection)")
+
     s.headers.update({
         "Accept":             "application/json, text/plain, */*",
         "Accept-Language":    "en-US,en;q=0.9",
@@ -366,39 +444,66 @@ def simulate_video_watch(
     course_id:  str,
     batch_id:   str,
 ):
-    h         = CONFIG["human"]
-    cid       = item["content_id"]
-    duration  = item["duration"]
-    real_time = h["real_time_mode"]
+    h        = CONFIG["human"]
+    cid      = item["content_id"]
+    duration = item["duration"]
+    mode     = h.get("watch_mode", "fast")
 
     fetch_content_metadata(session, cid)
     time.sleep(random.uniform(1.5, 3.5))
 
-    log.info("    ▶ Watching  (%.0fs, %s mode)", duration, "real-time" if real_time else "fast")
-
-    pos = 0.0
-    while pos < duration * 0.90:
-        step = _jitter(h["heartbeat_interval_base"], h["heartbeat_interval_jitter"])
-        pos  = min(pos + step, duration * 0.93)
-        sleep_for = (
-            step + random.uniform(0, 0.5)
-            if real_time
-            else random.uniform(h["fast_mode_sleep_min"], h["fast_mode_sleep_max"])
-        )
-        time.sleep(sleep_for)
-        patch_progress(session, cid, course_id, batch_id,
-                       "video/mp4", duration, round(pos, 6), status=1)
-
     frac      = random.uniform(h["completion_fraction_min"], h["completion_fraction_max"])
     final_pos = round(duration * frac, 6)
 
-    if real_time:
-        time.sleep(max(0, duration - pos) + random.uniform(0, 3))
-    else:
-        time.sleep(random.uniform(h["fast_mode_sleep_min"], h["fast_mode_sleep_max"]))
+    # ── WARP MODE ─────────────────────────────────────────────────────────────
+    # Two PATCHes only: one marking the video as started (a few seconds in),
+    # one marking it complete. The "current" position in the completion PATCH
+    # equals the full duration so the server records 100 % watch time.
+    if mode == "warp":
+        log.info("    ▶ Watching  (%.0fs, warp mode)", duration)
 
-    patch_progress(session, cid, course_id, batch_id,
-                   "video/mp4", duration, final_pos, status=2)
+        # PATCH 1 — started (a few seconds in, looks like the player buffered)
+        start_pos = round(random.uniform(1.5, 5.0), 6)
+        patch_progress(session, cid, course_id, batch_id,
+                       "video/mp4", duration, start_pos, status=1)
+
+        # Tiny pause between the two events
+        time.sleep(random.uniform(
+            h.get("warp_between_patches_min", 0.8),
+            h.get("warp_between_patches_max", 2.5),
+        ))
+
+        # PATCH 2 — completed (position = full duration, pct = 100)
+        patch_progress(session, cid, course_id, batch_id,
+                       "video/mp4", duration, final_pos, status=2)
+
+    # ── REAL-TIME MODE ────────────────────────────────────────────────────────
+    elif mode == "real_time":
+        log.info("    ▶ Watching  (%.0fs, real-time mode)", duration)
+        pos = 0.0
+        while pos < duration * 0.90:
+            step = _jitter(h["heartbeat_interval_base"], h["heartbeat_interval_jitter"])
+            pos  = min(pos + step, duration * 0.93)
+            time.sleep(step + random.uniform(0, 0.5))
+            patch_progress(session, cid, course_id, batch_id,
+                           "video/mp4", duration, round(pos, 6), status=1)
+        time.sleep(max(0, duration - pos) + random.uniform(0, 3))
+        patch_progress(session, cid, course_id, batch_id,
+                       "video/mp4", duration, final_pos, status=2)
+
+    # ── FAST MODE (default) ───────────────────────────────────────────────────
+    else:
+        log.info("    ▶ Watching  (%.0fs, fast mode)", duration)
+        pos = 0.0
+        while pos < duration * 0.90:
+            step = _jitter(h["heartbeat_interval_base"], h["heartbeat_interval_jitter"])
+            pos  = min(pos + step, duration * 0.93)
+            time.sleep(random.uniform(h["fast_mode_sleep_min"], h["fast_mode_sleep_max"]))
+            patch_progress(session, cid, course_id, batch_id,
+                           "video/mp4", duration, round(pos, 6), status=1)
+        time.sleep(random.uniform(h["fast_mode_sleep_min"], h["fast_mode_sleep_max"]))
+        patch_progress(session, cid, course_id, batch_id,
+                       "video/mp4", duration, final_pos, status=2)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PDF — single completion PATCH (no heartbeats needed)

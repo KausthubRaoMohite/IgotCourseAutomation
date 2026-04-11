@@ -59,7 +59,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 CONFIG = {
     # ── Identity ──────────────────────────────────────────────────────────────
     "user_id": "--PASTE YOUR USER ID--",   # wid / userId
-    "course_id": "--PASTE YOUR USER ID--", # leave blank if using "all courses" mode | Example of Id: "do_114371136825573376161" 
+    "course_id": "--PASTE YOUR COURSE ID--", # leave blank if using "all courses" mode | Example of Id: "do_114371136825573376161" 
 
     # Paste the FULL cookie string from DevTools (one long line, expires per session)
     "cookie": (

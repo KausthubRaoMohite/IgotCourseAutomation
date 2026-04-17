@@ -1,11 +1,11 @@
 # IgotCourseAutomation
 
-Welcome to the IgotCourseAutomation repository! This project is designed to help automate various aspects of your course management process.
+Welcome to the IgotCourseAutomation repository! This project is designed to help automate various aspects of your course completeion process for IGOT.
 
 
 
 ## Introduction
-IgotCourseAutomation is a tool for course administrators and educators to streamline their workflow through automation. This project uses modern technologies to manage and execute tasks quickly.
+IgotCourseAutomation is a tool for course administrators and educators to streamline their workflow through automation. This project uses modern technologies to manage and execute tasks quickly😉.
 
 ## Proxy Settings (optional)
 Set env vars before running — no code changes needed:

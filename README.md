@@ -1,6 +1,6 @@
 # IgotCourseAutomation
 
-Welcome to the IgotCourseAutomation repository! This project is designed to help automate various aspects of your course completeion process for IGOT.
+Welcome to the IgotCourseAutomation repository! This project is designed to help automate various aspects of your course completion process for IGOT.
 
 
 

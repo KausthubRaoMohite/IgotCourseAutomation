@@ -1,45 +1,40 @@
 """
-iGOT Karmayogi Course Auto-Completer  v3
+iGOT Karmayogi Course Auto-Completer  v4
 =========================================
-Handles: Videos (with heartbeat simulation), PDFs, Quizzes (auto-answered),
-         and the end-of-course Feedback Survey.
+Handles: Videos (heartbeat / fast / warp), PDFs, Quizzes, Feedback Survey.
 
 HOW TO USE
 ----------
-1. Log in to portal.igotkarmayogi.gov.in in Chrome.
-2. Open DevTools → Application → Cookies → copy the full cookie string.
-3. Fill in the CONFIG block below and run:  python igot_autocomplete.py
+Just run:   python igot_autocomplete.py
+
+The script walks you through everything interactively:
+  • Credentials  — User ID and Cookie (saved locally so you only paste once)
+  • Run mode     — single course or all In-Progress courses
+  • Settings     — review and tweak every option before starting
+  • Mid-run menu — pause between courses to change settings or stop
+
+CREDENTIALS FILE
+----------------
+Credentials are saved to  .igot_session.json  in the same folder.
+Delete that file to force a fresh login prompt.
 
 PROXY SUPPORT (optional)
 -------------------------
-If you are behind an authenticated corporate/office proxy, set all four
-environment variables below before running. If any are missing the script
-runs without a proxy (direct connection).
+Set env vars before running — no code changes needed:
 
-  Windows (Command Prompt):
-      set PROXY_USER=your_username
-      set PROXY_PASSWORD=your_password
-      set PROXY_HOST=proxy.company.com
-      set PROXY_PORT=8080
-      python igot_autocomplete.py
+  Windows CMD:       set PROXY_USER=u & set PROXY_PASSWORD=p &
+                     set PROXY_HOST=proxy.co & set PROXY_PORT=8080
+  PowerShell:        $env:PROXY_USER="u"; $env:PROXY_PASSWORD="p"
+                     $env:PROXY_HOST="proxy.co"; $env:PROXY_PORT="8080"
+  Linux / macOS:     PROXY_USER=u PROXY_PASSWORD=p PROXY_HOST=h PROXY_PORT=8080
 
-  Windows (PowerShell):
-      $env:PROXY_USER="your_username"
-      $env:PROXY_PASSWORD="your_password"
-      $env:PROXY_HOST="proxy.company.com"
-      $env:PROXY_PORT="8080"
-      python igot_autocomplete.py
+If any of the four is missing the script connects directly.
 
-  Linux / macOS:
-      PROXY_USER=your_username PROXY_PASSWORD=your_password \
-      PROXY_HOST=proxy.company.com PROXY_PORT=8080 \
-      python igot_autocomplete.py
-
-⚠️ Do not log out of the Chrome browser while the script is running,
-or it will instantly invalidate the cookie the script is using!
+⚠️  Do not log out of Chrome while running — it invalidates the cookie.
 """
 
 import time
+import json
 import urllib.parse
 import random
 import logging
@@ -53,79 +48,39 @@ os.environ['no_proxy'] = '*' # REMOVE THIS IF NEEDED (PROXY BASED)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ██  CONFIG  — only these need changing per session / course
+# ██  DEFAULTS  — these are the out-of-the-box values shown in the settings
+#                 menu. CONFIG is populated at runtime from user input.
 # ─────────────────────────────────────────────────────────────────────────────
 
-CONFIG = {
-    # ── Identity ──────────────────────────────────────────────────────────────
-    "user_id": "--PASTE YOUR USER ID--",   # wid / userId
-    "course_id": "--PASTE YOUR COURSE ID--", # leave blank if using "all courses" mode | Example of Id: "do_114371136825573376161" 
-
-    # Paste the FULL cookie string from DevTools (one long line, expires per session)
-    "cookie": (
-        "--PASTE YOUR COOKIE STRING--"
-    ),
-
-    # ── Run mode ──────────────────────────────────────────────────────────────
-    # "single"  → process only CONFIG["course_id"]
-    # "all"     → fetch all In-Progress enrolled courses and process each
-    "mode": "single",
-
-    # Course IDs to always skip regardless of mode (POSH etc.)
-    "skip_course_ids": [
-        #"do_113569878939262976132",   # SCORM FORMAT COURSES
-    ],
-
-    # ── Feature flags ─────────────────────────────────────────────────────────
+DEFAULTS = {
+    "mode":             "single",    # "single" | "all"
     "complete_videos":  True,
     "complete_pdfs":    True,
     "complete_quizzes": True,
     "submit_survey":    True,
-
-    # ── Human-behaviour tuning ────────────────────────────────────────────────
+    "skip_course_ids":  [],
     "human": {
-        # Heartbeat interval while "watching" (~30 s like a real browser)
-        "heartbeat_interval_base":   30,    # seconds
-        "heartbeat_interval_jitter":  8,    # ± random seconds added each cycle
-
-        # Pause between consecutive items within the same module
-        "between_item_pause_min":  4,
-        "between_item_pause_max": 15,
-
-        # Extra pause when switching modules (simulates reading the TOC)
-        "between_module_pause_min": 8,
-        "between_module_pause_max": 30,
-
-        # Extra pause between courses in "all" mode
-        "between_course_pause_min": 5,
-        "between_course_pause_max": 15,
-
-        # The final "current" position sent in the completion PATCH (95–99 %)
-        "completion_fraction_min": 0.95,
-        "completion_fraction_max": 0.99,
-
-        # Video watch mode — pick ONE of the three:
-        #   "real_time" → actually sleeps the full video duration (safest, slow)
-        #   "fast"      → periodic heartbeats with small jitter sleeps (balanced)
-        #   "warp"      → two PATCHes only: started + completed, no heartbeat loop.
-        #                 The reported watch-time equals the full content duration. 
-        #                 ⚠️USE WARP MODE WITH CAUTION
-
-        "watch_mode": "warp",
-
-        # Delays used in fast mode (ignored in real_time and warp)
-        "fast_mode_sleep_min": 1.5,
-        "fast_mode_sleep_max": 4.0,
-
-        # Warp mode: tiny pause between the start-PATCH and completion-PATCH
-        # (simulates browser processing time between the two events)
-        "warp_between_patches_min": 0.8,
-        "warp_between_patches_max": 2.5,
-
-        # Skip items the server already shows as completed (status == 2)
-        "skip_if_completed": True,
+        "heartbeat_interval_base":   30,
+        "heartbeat_interval_jitter":  8,
+        "between_item_pause_min":     4,
+        "between_item_pause_max":    15,
+        "between_module_pause_min":   8,
+        "between_module_pause_max":  30,
+        "between_course_pause_min":   5,
+        "between_course_pause_max":  15,
+        "completion_fraction_min":   0.95,
+        "completion_fraction_max":   0.99,
+        "watch_mode":                "warp",   # "warp" | "fast" | "real_time"
+        "fast_mode_sleep_min":        1.5,
+        "fast_mode_sleep_max":        4.0,
+        "warp_between_patches_min":   0.8,
+        "warp_between_patches_max":   2.5,
+        "skip_if_completed":         True,
     },
 }
+
+# Populated interactively at startup — do not edit here.
+CONFIG: dict = {}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
@@ -844,15 +799,367 @@ def process_course(session: requests.Session, course_id: str):
     log.info("  %d/%d items marked complete on server", done, len(prog))
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ██  INTERACTIVE UI
+# ─────────────────────────────────────────────────────────────────────────────
+
+CREDS_FILE = ".igot_session.json"
+_W = 65   # banner width
+
+
+def _clear():
+    os.system("cls" if os.name == "nt" else "clear")
+
+
+def _banner(subtitle: str = ""):
+    print("═" * _W)
+    print("  iGOT Karmayogi — Course Auto-Completer  v4")
+    if subtitle:
+        print(f"  {subtitle}")
+    print("═" * _W)
+
+
+def _ask(prompt: str, default: str = "", secret: bool = False) -> str:
+    """Prompt with an optional default. Enter alone accepts the default."""
+    import getpass
+    display = f" [{default[:40] + '…' if len(default) > 40 else default}]" if default else ""
+    full_prompt = f"  {prompt}{display}: "
+    try:
+        val = (getpass.getpass(full_prompt) if secret else input(full_prompt)).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return default
+    return val if val else default
+
+
+def _yn(prompt: str, default: bool = True) -> bool:
+    hint = "[Y/n]" if default else "[y/N]"
+    try:
+        ans = input(f"  {prompt} {hint}: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return default
+    if not ans:
+        return default
+    return ans in ("y", "yes")
+
+
+def _pick(prompt: str, options: list, default_idx: int = 0) -> int:
+    """Show a numbered list and return the chosen index."""
+    print(f"\n  {prompt}")
+    for i, opt in enumerate(options):
+        marker = "●" if i == default_idx else "○"
+        print(f"    {marker} {i + 1}. {opt}")
+    while True:
+        try:
+            raw = input(f"  Choice [1-{len(options)}] (Enter = {default_idx + 1}): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return default_idx
+        if not raw:
+            return default_idx
+        if raw.isdigit() and 1 <= int(raw) <= len(options):
+            return int(raw) - 1
+        print("  ⚠  Invalid choice, try again.")
+
+
+# ── Credentials persistence ───────────────────────────────────────────────────
+
+def _load_creds() -> dict:
+    try:
+        with open(CREDS_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_creds(user_id: str, cookie: str):
+    try:
+        with open(CREDS_FILE, "w") as f:
+            json.dump({"user_id": user_id, "cookie": cookie}, f)
+    except Exception:
+        pass
+
+
+def _credentials_wizard() -> tuple:
+    """
+    Walks the user through providing User ID and Cookie.
+    Loads any previously saved values as defaults so they only
+    need to paste a new cookie when the session expires.
+    Returns (user_id, cookie).
+    """
+    saved = _load_creds()
+    _clear()
+    _banner("Step 1 of 3 — Credentials")
+    print()
+    print("  How to get these values:")
+    print("  1. Log in to portal.igotkarmayogi.gov.in in Chrome")
+    print("  2. Press F12 → Network tab → pick any API request")
+    print("  3. Copy 'wid' header value  →  User ID")
+    print("  4. Copy 'Cookie' header value  →  Cookie string")
+    if saved:
+        print()
+        print(f"  ℹ  Saved session found for user: {saved.get('user_id', '?')}")
+        if _yn("  Use saved credentials?", default=True):
+            return saved["user_id"], saved["cookie"]
+    print()
+    user_id = _ask("User ID (wid)", saved.get("user_id", ""))
+    print()
+    print("  Paste the FULL Cookie string below (one long line):")
+    cookie  = _ask("Cookie", saved.get("cookie", ""))
+    if user_id and cookie:
+        _save_creds(user_id, cookie)
+        print("  ✓  Credentials saved to", CREDS_FILE)
+    return user_id, cookie
+
+
+# ── Run mode wizard ───────────────────────────────────────────────────────────
+
+def _mode_wizard() -> tuple:
+    """
+    Asks for run mode and, if single, for the course ID.
+    Returns (mode, course_id).
+    """
+    _clear()
+    _banner("Step 2 of 3 — What to run")
+    mode_idx = _pick(
+        "Select run mode:",
+        [
+            "Single course  — enter one course ID",
+            "All courses    — process every In-Progress enrollment",
+        ],
+        default_idx=0,
+    )
+    mode = "single" if mode_idx == 0 else "all"
+    course_id = ""
+    if mode == "single":
+        print()
+        course_id = _ask("Course ID  (e.g. do_114371136825573376161)", "")
+        while not course_id.startswith("do_"):
+            print("  ⚠  Course ID must start with 'do_'")
+            course_id = _ask("Course ID", "")
+    return mode, course_id
+
+
+# ── Settings menu ─────────────────────────────────────────────────────────────
+
+def _fmt_bool(v: bool) -> str:
+    return "✓ ON " if v else "✗ OFF"
+
+
+def _fmt_watch(m: str) -> str:
+    labels = {"warp": "Warp  (2 PATCHes, instant)", "fast": "Fast  (periodic heartbeats)",
+              "real_time": "Real-time  (sleeps full duration)"}
+    return labels.get(m, m)
+
+
+def _print_settings():
+    h = CONFIG["human"]
+    print()
+    print("  ┌─ Current settings ─────────────────────────────────────────")
+    print(f"  │  [1] Mode          : {CONFIG['mode'].upper()}"
+          + (f"  →  {CONFIG.get('course_id', '')}" if CONFIG["mode"] == "single" else ""))
+    print(f"  │  [2] Watch mode    : {_fmt_watch(h['watch_mode'])}")
+    print(f"  │  [3] Videos        : {_fmt_bool(CONFIG['complete_videos'])}")
+    print(f"  │  [4] PDFs          : {_fmt_bool(CONFIG['complete_pdfs'])}")
+    print(f"  │  [5] Quizzes       : {_fmt_bool(CONFIG['complete_quizzes'])}")
+    print(f"  │  [6] Survey        : {_fmt_bool(CONFIG['submit_survey'])}")
+    print(f"  │  [7] Skip done     : {_fmt_bool(h['skip_if_completed'])}")
+    print(f"  │  [8] Item pause    : {h['between_item_pause_min']}–{h['between_item_pause_max']} s")
+    print(f"  │  [9] Module pause  : {h['between_module_pause_min']}–{h['between_module_pause_max']} s")
+    if CONFIG["mode"] == "all":
+        print(f"  │  [10] Course pause : {h['between_course_pause_min']}–{h['between_course_pause_max']} s")
+        skips = CONFIG.get("skip_course_ids", [])
+        print(f"  │  [11] Skip list    : {len(skips)} course(s)" + (f" — {skips[0]}…" if skips else ""))
+    print("  └────────────────────────────────────────────────────────────")
+
+
+def _edit_watch_mode():
+    idx = _pick("Watch mode:", [
+        "Warp      — 2 PATCHes only (fastest, ⚠ use with care)",
+        "Fast      — periodic heartbeats with short sleeps (balanced)",
+        "Real-time — actually sleeps the full video duration (safest, slow)",
+    ], default_idx=["warp", "fast", "real_time"].index(CONFIG["human"]["watch_mode"]))
+    CONFIG["human"]["watch_mode"] = ["warp", "fast", "real_time"][idx]
+
+
+def _edit_pause_range(label: str, key_min: str, key_max: str):
+    h = CONFIG["human"]
+    print(f"\n  Current: {h[key_min]}–{h[key_max]} seconds")
+    try:
+        lo = input(f"  New minimum (Enter = {h[key_min]}): ").strip()
+        hi = input(f"  New maximum (Enter = {h[key_max]}): ").strip()
+        if lo:
+            h[key_min] = float(lo)
+        if hi:
+            h[key_max] = float(hi)
+    except ValueError:
+        print("  ⚠  Invalid number — keeping previous values.")
+
+
+def _edit_skip_list():
+    skips = CONFIG.get("skip_course_ids", [])
+    print(f"\n  Current skip list: {skips or '(empty)'}")
+    print("  Enter course IDs to skip, one per line. Blank line to finish.")
+    print("  (Leave empty and press Enter to keep the current list.)")
+    new_ids = []
+    while True:
+        try:
+            line = input("  do_...: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if not line:
+            break
+        if line.startswith("do_"):
+            new_ids.append(line)
+    if new_ids:
+        CONFIG["skip_course_ids"] = new_ids
+        print(f"  ✓  Skip list updated: {new_ids}")
+
+
+def _settings_menu():
+    """Full settings review screen shown before the run starts."""
+    while True:
+        _clear()
+        _banner("Step 3 of 3 — Review settings")
+        _print_settings()
+        print()
+        print("  Enter a setting number to change it,")
+        print("  or press Enter to start the run.")
+        print()
+        try:
+            choice = input("  → ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if not choice:
+            break
+        if choice == "1":
+            mode, cid = _mode_wizard()
+            CONFIG["mode"] = mode
+            CONFIG["course_id"] = cid
+        elif choice == "2":
+            _edit_watch_mode()
+        elif choice == "3":
+            CONFIG["complete_videos"]  = not CONFIG["complete_videos"]
+        elif choice == "4":
+            CONFIG["complete_pdfs"]    = not CONFIG["complete_pdfs"]
+        elif choice == "5":
+            CONFIG["complete_quizzes"] = not CONFIG["complete_quizzes"]
+        elif choice == "6":
+            CONFIG["submit_survey"]    = not CONFIG["submit_survey"]
+        elif choice == "7":
+            CONFIG["human"]["skip_if_completed"] = not CONFIG["human"]["skip_if_completed"]
+        elif choice == "8":
+            _edit_pause_range("Item pause", "between_item_pause_min", "between_item_pause_max")
+        elif choice == "9":
+            _edit_pause_range("Module pause", "between_module_pause_min", "between_module_pause_max")
+        elif choice == "10" and CONFIG["mode"] == "all":
+            _edit_pause_range("Course pause", "between_course_pause_min", "between_course_pause_max")
+        elif choice == "11" and CONFIG["mode"] == "all":
+            _edit_skip_list()
+        else:
+            print("  ⚠  Unknown option.")
+            time.sleep(0.8)
+
+
+# ── Mid-run pause menu (shown between courses in "all" mode) ──────────────────
+
+def _between_course_menu(next_name: str, remaining: int) -> bool:
+    """
+    Shown after each course completes in "all" mode.
+    Returns False if the user wants to stop the run entirely.
+    """
+    print()
+    print("─" * _W)
+    print(f"  ✓  Course done.  {remaining} course(s) remaining.")
+    print(f"  ↳  Next: {next_name}")
+    print()
+    print("  Options:")
+    print("    Enter  — continue to next course")
+    print("    s      — skip next course")
+    print("    w      — change watch mode")
+    print("    f      — toggle feature flags (videos/pdfs/quizzes/survey)")
+    print("    q      — quit after this course")
+    print("─" * _W)
+
+    try:
+        choice = input("  → ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return True   # continue
+
+    if choice == "q":
+        print("  Stopping run as requested.")
+        return False
+
+    if choice == "s":
+        CONFIG.setdefault("_skip_next", True)
+        print("  ⏭  Next course will be skipped.")
+        return True
+
+    if choice == "w":
+        _edit_watch_mode()
+        print(f"  ✓  Watch mode → {CONFIG['human']['watch_mode']}")
+        return True
+
+    if choice == "f":
+        print()
+        print(f"  [1] Videos   {_fmt_bool(CONFIG['complete_videos'])}")
+        print(f"  [2] PDFs     {_fmt_bool(CONFIG['complete_pdfs'])}")
+        print(f"  [3] Quizzes  {_fmt_bool(CONFIG['complete_quizzes'])}")
+        print(f"  [4] Survey   {_fmt_bool(CONFIG['submit_survey'])}")
+        try:
+            sub = input("  Toggle which? (1-4, or Enter to skip): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            sub = ""
+        if sub == "1": CONFIG["complete_videos"]  = not CONFIG["complete_videos"]
+        if sub == "2": CONFIG["complete_pdfs"]    = not CONFIG["complete_pdfs"]
+        if sub == "3": CONFIG["complete_quizzes"] = not CONFIG["complete_quizzes"]
+        if sub == "4": CONFIG["submit_survey"]    = not CONFIG["submit_survey"]
+        return True
+
+    return True   # default: continue
+
+
+# ── CONFIG bootstrap ──────────────────────────────────────────────────────────
+
+def _bootstrap():
+    """
+    Runs the startup wizard and populates the global CONFIG dict.
+    Called once at the top of main() before any network activity.
+    """
+    import copy
+
+    # Step 1 — credentials
+    user_id, cookie = _credentials_wizard()
+    if not user_id or not cookie:
+        print("\n  ✗  User ID and Cookie are required. Exiting.")
+        raise SystemExit(1)
+
+    # Step 2 — mode
+    mode, course_id = _mode_wizard()
+
+    # Step 3 — populate CONFIG from DEFAULTS, then let user tweak
+    CONFIG.update(copy.deepcopy(DEFAULTS))
+    CONFIG["user_id"]   = user_id
+    CONFIG["cookie"]    = cookie
+    CONFIG["mode"]      = mode
+    CONFIG["course_id"] = course_id
+
+    _settings_menu()
+
+    _clear()
+    _banner("Running…")
+    print()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    log.info("═" * 65)
-    log.info("iGOT Karmayogi Auto-Completer  v3")
+    _bootstrap()   # interactive wizard — populates CONFIG
+
+    log.info("iGOT Karmayogi Auto-Completer  v4")
     log.info("User   : %s", CONFIG["user_id"])
-    log.info("Mode   : %s", CONFIG["mode"])
-    log.info("═" * 65)
+    log.info("Mode   : %s  |  Watch: %s", CONFIG["mode"], CONFIG["human"]["watch_mode"])
+    log.info("═" * _W)
 
     session = build_session()
     h = CONFIG["human"]
@@ -863,48 +1170,57 @@ def main():
             log.error("No In-Progress courses found. Aborting.")
             return
 
-        for i, enroll in enumerate(enrolled, 1):
+        # Filter out 100 % complete courses up-front
+        todo = [e for e in enrolled if e.get("completionPercentage", 0) != 100]
+        done_count = len(enrolled) - len(todo)
+        if done_count:
+            log.info("Skipping %d already-complete course(s).", done_count)
+
+        for i, enroll in enumerate(todo, 1):
             cid  = enroll.get("courseId", "")
             name = enroll.get("content", {}).get("name", cid)
-            
-            # --- Extract completion percentage ---
-            completion_pct = enroll.get("completionPercentage", 0)
-            
+            pct  = enroll.get("completionPercentage", 0)
+
             log.info("")
-            log.info("━" * 65)
-            log.info("[%d/%d] Course: %s (Progress: %s%%)", i, len(enrolled), name, completion_pct)
+            log.info("━" * _W)
+            log.info("[%d/%d] %s  (%s%%)", i, len(todo), name, pct)
             log.info("ID: %s", cid)
-            log.info("━" * 65)
-            
-            # --- Hard skip if the course is already done ---
-            if completion_pct == 100:
-                log.info("  ✅ Course is already 100%% complete. Skipping entirely.")
+            log.info("━" * _W)
+
+            # Handle "skip next" flag set from the between-course menu
+            if CONFIG.pop("_skip_next", False):
+                log.info("  ⏭  Skipped by user request.")
                 continue
 
-            # Process the course
             process_course(session, cid)
 
-            # Pause before the next course (if not the last one)
-            if i < len(enrolled):
-                pause = random.uniform(
+            # Between-course pause + interactive menu (not shown after the last one)
+            if i < len(todo):
+                next_name = todo[i].get("content", {}).get("name", todo[i].get("courseId", ""))
+                # Sleep a portion of the pause, then show menu
+                pre_sleep = random.uniform(
                     h["between_course_pause_min"],
                     h["between_course_pause_max"],
                 )
-                log.info("\n(pausing %.0fs before next course…)", pause)
-                time.sleep(pause)
+                log.info("\n(pausing %.0fs…)", pre_sleep)
+                time.sleep(pre_sleep)
 
-    else:  # "single"
-        cid = CONFIG["course_id"]
+                should_continue = _between_course_menu(next_name, len(todo) - i)
+                if not should_continue:
+                    break
+
+    else:   # "single"
+        cid = CONFIG.get("course_id", "")
         if not cid:
-            log.error("No course_id set in CONFIG. Aborting.")
+            log.error("No course_id set. Aborting.")
             return
         log.info("Course : %s", cid)
         process_course(session, cid)
 
     log.info("")
-    log.info("═" * 65)
-    log.info("🎉 All done! Have a great day!")
-    log.info("═" * 65)
+    log.info("═" * _W)
+    log.info("🎉 All done! Have a great day! Oh..and happy learning *Wink *Wink")
+    log.info("═" * _W)
 
 
 if __name__ == "__main__":

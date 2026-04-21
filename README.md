@@ -17,5 +17,5 @@ Set env vars before running — no code changes needed:
 
 If any of the four is missing the script connects directly.
 
-##⚠️RECOMMENDED TO USE "igot_autoscript.py"
+## ⚠️RECOMMENDED TO USE "igot_autoscript.py"
 
